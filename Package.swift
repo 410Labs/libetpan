@@ -17,6 +17,11 @@ let package = Package(
     targets: [
         .target(
             name: "libetpan",
+            dependencies: [
+                // SASL-on-iOS: iOS has no system libsasl2, so link a vendored static build
+                // (410Labs CI#150; ported from functionaldude/libetpan onto dinhvh HEAD).
+                .target(name: "sasl2", condition: .when(platforms: [.iOS])),
+            ],
             path: ".",
             exclude: [
                 "build-android",
@@ -215,6 +220,8 @@ let package = Package(
                 .define("HAVE_CONFIG_H", to: "1"),
                 .define("HAVE_CFNETWORK", to: "1"),
                 .define("LIBETPAN_IOS_DISABLE_SSL", to: "1"),
+                .define("USE_SASL", .when(platforms: [.macOS, .iOS])),
+                .headerSearchPath("SASL2.xcframework/ios-arm64/Headers"),
                 .headerSearchPath("build-spm/config"),
                 .headerSearchPath("build-spm/include"),
                 .headerSearchPath("build-spm/include/libetpan"),
@@ -252,7 +259,10 @@ let package = Package(
                 .linkedFramework("CoreServices", .when(platforms: [.macOS])),
                 .linkedFramework("Security"),
                 .linkedLibrary("z"),
+                .linkedLibrary("sasl2", .when(platforms: [.macOS])),
             ]
         ),
+        // Vendored cyrus-sasl static build for iOS (SASL PLAIN / password-IMAP). CI#150.
+        .binaryTarget(name: "sasl2", path: "SASL2.xcframework"),
     ]
 )
