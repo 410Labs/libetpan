@@ -259,6 +259,7 @@ let package = Package(
                 .linkedFramework("CoreServices", .when(platforms: [.macOS])),
                 .linkedFramework("Security"),
                 .linkedLibrary("z"),
+                .linkedLibrary("iconv"),
                 .linkedLibrary("sasl2", .when(platforms: [.macOS])),
             ]
         ),
