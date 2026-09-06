@@ -3312,6 +3312,8 @@ static int mailimf_addr_spec_parse(const char * message, size_t length,
 
   final = FALSE;
   while (1) {
+    if (end >= length)
+      break;
     switch (message[end]) {
     case '>':
     case ',':
@@ -3463,6 +3465,8 @@ static int mailimf_addr_spec_msg_id_parse(const char * message, size_t length,
     
     final = FALSE;
     while (1) {
+        if (end >= length)
+            break;
         switch (message[end]) {
             case '>':
             case '\r':
