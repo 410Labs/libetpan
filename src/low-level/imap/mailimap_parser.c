@@ -501,6 +501,11 @@ mailimap_mbx_list_oflag_parse(mailstream * fd, MMAPString * buffer, struct maili
 			      progress_function * progr_fun);
 
 static int
+mailimap_mbx_list_empty_flag_extension_parse(mailstream * fd, MMAPString * buffer, struct mailimap_parser_context * parser_ctx,
+			      size_t * indx,
+			      char ** result);
+
+static int
 mailimap_mbx_list_oflag_no_sflag_parse(mailstream * fd, MMAPString * buffer, struct mailimap_parser_context * parser_ctx,
     size_t * indx,
     struct mailimap_mbx_list_oflag ** result,
@@ -1382,7 +1387,7 @@ mailimap_custom_string_parse(mailstream * fd, MMAPString * buffer, struct mailim
 
   end = begin;
 
-  while (is_custom_char(buffer->str[end]))
+  while ((end < buffer->len) && is_custom_char(buffer->str[end]))
     end ++;
 
   if (end != begin) {
@@ -1482,6 +1487,9 @@ static int mailimap_digit_parse(mailstream * fd, MMAPString * buffer,
   size_t cur_token;
 
   cur_token = * indx;
+
+  if (cur_token >= buffer->len)
+    return MAILIMAP_ERROR_PARSE;
 
   if (is_digit(buffer->str[cur_token])) {
     * result = buffer->str[cur_token] - '0';
@@ -1831,8 +1839,8 @@ static int mailimap_auth_type_parse(mailstream * fd, MMAPString * buffer, struct
    base64          = *(4base64-char) [base64-terminal]
 */
 
-static int is_base64_4char(char * str);
-static int is_base64_terminal(char * str);
+static int is_base64_4char(const char * str, size_t len);
+static int is_base64_terminal(const char * str, size_t len);
 
 static int mailimap_base64_parse(mailstream * fd, MMAPString * buffer, struct mailimap_parser_context * parser_ctx,
 				 size_t * indx, char ** result,
@@ -1846,9 +1854,11 @@ static int mailimap_base64_parse(mailstream * fd, MMAPString * buffer, struct ma
   begin = * indx;
   end = begin;
 
-  while (is_base64_4char(buffer->str + end))
+  while ((end <= buffer->len) &&
+      is_base64_4char(buffer->str + end, buffer->len - end))
     end += 4;
-  if (is_base64_terminal(buffer->str + end))
+  if ((end <= buffer->len) &&
+      is_base64_terminal(buffer->str + end, buffer->len - end))
     end += 4;
 
   if (begin == end)
@@ -1876,9 +1886,12 @@ static int is_base64_char(char ch)
   return (is_alpha(ch) || is_digit(ch) || ch == '+' || ch == '/');
 }
 
-static int is_base64_4char(char * str)
+static int is_base64_4char(const char * str, size_t len)
 {
   size_t i;
+
+  if (len < 4)
+    return FALSE;
 
   for (i = 0 ; i < 4 ; i++)
     if (!is_base64_char(str[i]))
@@ -1890,15 +1903,9 @@ static int is_base64_4char(char * str)
    base64-terminal = (2base64-char "==") / (3base64-char "=")
 */
 
-static int is_base64_terminal(char * str)
+static int is_base64_terminal(const char * str, size_t len)
 {
-  if (str[0] == 0)
-    return FALSE;
-  if (str[1] == 0)
-    return FALSE;
-  if (str[2] == 0)
-    return FALSE;
-  if (str[3] == 0)
+  if (len < 4)
     return FALSE;
 
   if (is_base64_char(str[0]) && is_base64_char(str[1])
@@ -4740,6 +4747,9 @@ static int mailimap_digit_nz_parse(mailstream * fd, MMAPString * buffer, struct 
 
   cur_token = * indx;
 
+  if (cur_token >= buffer->len)
+    return MAILIMAP_ERROR_PARSE;
+
   if (is_digit_nz(buffer->str[cur_token])) {
     * result = buffer->str[cur_token] - '0';
     cur_token ++;
@@ -5812,13 +5822,16 @@ static int mailimap_flag_list_skip_group_parse(mailstream * fd,
 
   cur_token = * indx;
 
+  if (cur_token >= buffer->len)
+    return MAILIMAP_ERROR_PARSE;
+
   if (buffer->str[cur_token] != '(')
     return MAILIMAP_ERROR_PARSE;
 
   cur_token ++;
   depth = 1;
 
-  while (buffer->str[cur_token] != '\0') {
+  while (cur_token < buffer->len) {
     switch (buffer->str[cur_token]) {
     case '(':
       depth ++;
@@ -7343,6 +7356,13 @@ mailimap_mbx_list_oflag_parse(mailstream * fd, MMAPString * buffer, struct maili
       type = MAILIMAP_MBX_LIST_OFLAG_FLAG_EXT;
   }
 
+  if (r == MAILIMAP_ERROR_PARSE) {
+    r = mailimap_mbx_list_empty_flag_extension_parse(fd, buffer, parser_ctx,
+        &cur_token, &flag_ext);
+    if (r == MAILIMAP_NO_ERROR)
+      type = MAILIMAP_MBX_LIST_OFLAG_FLAG_EXT;
+  }
+
   if (r != MAILIMAP_NO_ERROR) {
     res = r;
     goto err;
@@ -7364,6 +7384,41 @@ mailimap_mbx_list_oflag_parse(mailstream * fd, MMAPString * buffer, struct maili
     mailimap_flag_extension_free(flag_ext);
  err:
   return res;
+}
+
+static int
+mailimap_mbx_list_empty_flag_extension_parse(mailstream * fd, MMAPString * buffer, struct mailimap_parser_context * parser_ctx,
+			      size_t * indx,
+			      char ** result)
+{
+  size_t cur_token;
+  size_t lookahead_token;
+  char * atom;
+  int r;
+
+  cur_token = * indx;
+
+  r = mailimap_char_parse(fd, buffer, &cur_token, '\\');
+  if (r == MAILIMAP_ERROR_PARSE)
+    r = mailimap_char_parse(fd, buffer, &cur_token, '/');
+  if (r != MAILIMAP_NO_ERROR)
+    return r;
+
+  lookahead_token = cur_token;
+  r = mailimap_cparenth_parse(fd, buffer, parser_ctx, &lookahead_token);
+  if (r != MAILIMAP_NO_ERROR)
+    return r;
+
+  atom = malloc(1);
+  if (atom == NULL)
+    return MAILIMAP_ERROR_MEMORY;
+
+  atom[0] = '\0';
+
+  * result = atom;
+  * indx = cur_token;
+
+  return MAILIMAP_NO_ERROR;
 }
 
 static int
@@ -8470,7 +8525,8 @@ mailimap_msg_att_body_section_parse_progress(mailstream * fd, MMAPString * buffe
   }
 
   r = mailimap_space_parse(fd, buffer, &cur_token);
-  if (r != MAILIMAP_NO_ERROR) {
+  /* A missing space before a literal or NIL is accepted. */
+  if ((r != MAILIMAP_NO_ERROR) && (r != MAILIMAP_ERROR_PARSE)) {
     res = r;
     goto free_section;
   }
@@ -8786,6 +8842,28 @@ int mailimap_nstring_parse(mailstream * fd, MMAPString * buffer, struct mailimap
                        ; (0 <= n < 4,294,967,296)
 */
 
+static int mailimap_number_overflows(uint32_t number, int digit)
+{
+  uint32_t max_number;
+
+  max_number = (uint32_t) -1;
+
+  return number > (max_number - (uint32_t) digit) / 10;
+}
+
+static void mailimap_number_add_digit(uint32_t * number, int digit)
+{
+  if (mailimap_number_overflows(* number, digit)) {
+#ifdef UNSTRICT_SYNTAX
+    * number = (uint32_t) -1;
+#endif
+  }
+  else if (* number != (uint32_t) -1) {
+    * number *= 10;
+    * number += (uint32_t) digit;
+  }
+}
+
 int
 mailimap_number_parse(mailstream * fd, MMAPString * buffer,
 		      size_t * indx, uint32_t * result)
@@ -8816,8 +8894,11 @@ mailimap_number_parse(mailstream * fd, MMAPString * buffer,
     if (r == MAILIMAP_ERROR_PARSE)
       break;
     else if (r == MAILIMAP_NO_ERROR) {
-      number *= 10;
-      number += digit;
+#ifndef UNSTRICT_SYNTAX
+      if (mailimap_number_overflows(number, digit))
+        return MAILIMAP_ERROR_PARSE;
+#endif
+      mailimap_number_add_digit(&number, digit);
       parsed = TRUE;
     }
     else
@@ -8882,8 +8963,11 @@ mailimap_nz_number_parse(mailstream * fd, MMAPString * buffer, struct mailimap_p
     if (r == MAILIMAP_ERROR_PARSE)
       break;
     else if (r == MAILIMAP_NO_ERROR) {
-      number *= 10;
-      number += (guint32) digit;
+#ifndef UNSTRICT_SYNTAX
+      if (mailimap_number_overflows(number, digit))
+        return MAILIMAP_ERROR_PARSE;
+#endif
+      mailimap_number_add_digit(&number, digit);
     }
     else
       return r;
